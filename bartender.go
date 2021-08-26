@@ -1,103 +1,101 @@
 package bartender
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 )
 
-const chunkSize = 5000
+const (
+	chunkSize   = 5000
+	queryFormat = `
+		INSERT INTO
+			%s
+		VALUES
+			%s`
+	headerFormat = `%s (%s)`
+	bodyFormat   = `(%s)`
+)
 
-func toString(arg interface{}) string {
-	switch arg := arg.(type) {
-	case string:
-		return arg
-	case bool:
-		return strconv.FormatBool(arg)
-	case uint:
-		return strconv.Itoa(int(arg))
-	case uint8:
-		return strconv.Itoa(int(arg))
-	case uint32:
-		return strconv.Itoa(int(arg))
-	case uint64:
-		return strconv.Itoa(int(arg))
-	case int:
-		return strconv.Itoa(arg)
-	case int8:
-		return strconv.Itoa(int(arg))
-	case int32:
-		return strconv.Itoa(int(arg))
-	case int64:
-		return strconv.Itoa(int(arg))
-	default:
-		return ""
+type DBScheme struct {
+	TableName string        `json:"table_name,omitempty"`
+	Type      reflect.Type  `json:"type,omitempty"`
+	Value     reflect.Value `json:"value,omitempty"`
+}
+
+func NewDBScheme(tableName string) DBScheme {
+	return DBScheme{
+		TableName: tableName,
 	}
 }
 
-func ShakeOneCocktail(tableName string, field interface{}) string {
-	queryString := `
-		INSERT INTO
-			%s (%s)
-		VALUES
-			%s`
-	var queryHeaders []string
-	var queryValues []string
+func (s *DBScheme) Reload(field interface{}) {
+	s.Type = reflect.TypeOf(field)
+	s.Value = reflect.ValueOf(field)
+}
+
+func (s *DBScheme) ReloadTableName(tableName string) {
+	s.TableName = tableName
+}
+
+func (s *DBScheme) Serve(field interface{}) (string, error) {
+	s.Reload(field)
+	var header string
+	var body string
+	if s.Value.Kind() == reflect.Slice {
+		var b []string
+		length := s.Value.Len()
+		for i := 0; i < length; i++ {
+			//s.Reload(s.Value.Index(i).Interface())
+			fmt.Printf("%+v", s.Value.Index(i).Interface())
+			//if i == 0 {
+			//	header = strings.Join(s.readHeader(), ",")
+			//}
+			//b = append(b, s.readBody())
+		}
+		body = strings.Join(b, ",")
+	} else {
+		header = fmt.Sprintf(headerFormat, s.TableName, strings.Join(s.readHeader(), ","))
+		body = s.readBody()
+	}
+	return fmt.Sprintf(queryFormat, header, body), nil
+}
+
+func (s DBScheme) readHeader() []string {
+	var _header []string
+	for i := 0; i < s.Type.NumField(); i++ {
+		ff := s.Type.Field(i)
+		tag := ff.Tag.Get("db")
+		_header = append(_header, tag)
+	}
+	return _header
+}
+
+func (s DBScheme) readBody() string {
+	return fmt.Sprintf(bodyFormat, strings.Join(s.getValue(), ","))
+}
+
+func (s DBScheme) getValue() []string {
+	var fields []string
+	for i := 0; i < s.Type.NumField(); i++ {
+		field := s.Value.FieldByName(s.Type.Field(i).Name).Interface()
+		fields = append(fields, toString(field))
+	}
+	return fields
+}
+
+func field2String(field interface{}) (string, string) {
 	t := reflect.TypeOf(field)
 	v := reflect.ValueOf(field)
+	var queryHeaders []string
+	var queryValues []string
+	queryHeader := `(%s)`
 	queryValue := `(%s)`
 	for i := 0; i < t.NumField(); i++ {
 		queryHeaders = append(queryHeaders, t.Field(i).Tag.Get("db"))
 		val := v.FieldByName(t.Field(i).Name).Interface()
 		queryValues = append(queryValues, toString(val))
 	}
-	return fmt.Sprintf(queryString, tableName, strings.Join(queryHeaders, ","), fmt.Sprintf(queryValue, strings.Join(queryValues, ",")))
-}
-
-func ShakeCocktails(tableName string, list ...interface{}) string {
-	//var queryHeaders []string
-	//var queryValues []string
-	//queryString := `
-	//	INSERT INTO
-	//		%s (%s)
-	//	VALUES
-	//		%s`
-	for _, ptr := range list {
-		fmt.Printf("%+v", ptr)
-		val, _ := tableForPointer(ptr)
-		fmt.Printf("+++%+v", val.Field(0))
-	}
-	//for i, field := range list {
-	//	fmt.Printf("******%+v", field)
-	//	t := reflect.TypeOf(field)
-	//	v := reflect.ValueOf(field)
-	//	fmt.Printf("++++%+v", t)
-	//	queryValue := `(%s)`
-	//	var values []string
-	//	for j := 0; j < v.NumField(); j++ {
-	//		if i == 0 {
-	//			queryHeaders = append(queryHeaders, t.Field(j).Tag.Get("db"))
-	//		}
-	//		values = append(values, toString(v.FieldByName(t.Field(j).Name).Interface()))
-	//	}
-	//	queryValues = append(queryValues, fmt.Sprintf(queryValue, strings.Join(values, ",")))
-	//	if i >= chunkSize {
-	//		return fmt.Sprintf(queryString, tableName, strings.Join(queryHeaders, ","), strings.Join(queryValues, ","))
-	//	}
-	//}
-	//return fmt.Sprintf(queryString, tableName, strings.Join(queryHeaders, ","), strings.Join(queryValues, ","))
-	return ""
-}
-
-func tableForPointer(ptr interface{}) (reflect.Value, error) {
-	ptrv := reflect.ValueOf(ptr)
-	if ptrv.Kind() != reflect.Ptr {
-		e := fmt.Sprintf("gorp: passed non-pointer: %v (kind=%v)", ptr,
-			ptrv.Kind())
-		return reflect.Value{}, errors.New(e)
-	}
-	elem := ptrv.Elem()
-	return elem, nil
+	return fmt.Sprintf(queryHeader, strings.Join(queryHeaders, ",")),
+		fmt.Sprintf(queryValue, strings.Join(queryValues, ","))
 }
